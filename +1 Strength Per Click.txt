@@ -1,0 +1,492 @@
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local GetPetsRemote = ReplicatedStorage.Remotes:FindFirstChild("GetPets")
+local ChangePetRemote = ReplicatedStorage.Remotes:FindFirstChild("ChangePet")
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "+1 Strength Per Click [rncenb]",
+   LoadingTitle = "Loading UI...",
+   LoadingSubtitle = "by rncenb",
+   Theme = "Ocean", 
+   ConfigurationSaving = {
+      Enabled = false,
+   }
+})
+
+
+local FarmTab = Window:CreateTab("Farming", 4483362458)
+local UpgradesTab = Window:CreateTab("Upgrades", 4483362458)
+local PetsTab = Window:CreateTab("Pets", 4483362458)
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+
+getgenv().autoUpgradePunch = false
+getgenv().autoUpgradeAura = false
+getgenv().autoUpgradeTitle = false
+getgenv().autoUpgradePetLuck = false
+getgenv().autoUpgradePetEquip = false
+getgenv().autoBreakAndTeleport = false
+getgenv().autoRebirth = false
+getgenv().requiredWinsForRebirth = 1000 
+getgenv().currentWorld = 1
+
+
+local worldCoordinates = {
+    [1] = CFrame.new(1856.34656, 12.7774334, -1541.22363, -1, 0, 0, 0, 1, 0, 0, 0, -1),
+    [2] = CFrame.new(1856.01367, 12.6440916, -823.943848, -1, 0, 0, 0, 1, 0, 0, 0, -1),
+    [3] = CFrame.new(1852.6803, 12.4441118, -423.712158, -1, 0, 0, 0, 1, 0, 0, 0, -1),
+}
+
+local worldEggOptions = {
+    [1] = {"Basic", "Ocean", "Blossom", "Desert"},
+    [2] = {"Blossom", "Desert", "Toxic", "Cursed"},
+    [3] = {"Orange", "Purple"},
+}
+
+local numberSuffixes = {
+    [""] = 1,
+    K = 1e3, M = 1e6, B = 1e9, T = 1e12,
+    Qa = 1e15, Qi = 1e18, Sx = 1e21, Sp = 1e24,
+    Oc = 1e27, No = 1e30, De = 1e33,
+}
+
+local function parseAbbreviatedNumber(input)
+    if type(input) == "number" then
+        return input
+    end
+    if type(input) ~= "string" then
+        return 0
+    end
+
+    local numPart, suffix = input:match("^([%d%.]+)%s*(%a*)$")
+    if not numPart then
+        return tonumber(input) or 0
+    end
+
+    local multiplier = numberSuffixes[suffix] or 1
+    return (tonumber(numPart) or 0) * multiplier
+end
+
+local function getCurrentWins()
+    local leaderstats = player:FindFirstChild("leaderstats")
+    if not leaderstats then return 0 end
+
+    local stat = leaderstats:FindFirstChild("Wins")
+        or leaderstats:FindFirstChild("Win")
+        or leaderstats:FindFirstChild("Trophies")
+
+    if stat then
+        return parseAbbreviatedNumber(stat.Value)
+    end
+    return 0
+end
+
+-- Pet Hatching Variables
+getgenv().selectedEggType = "Basic"
+getgenv().autoHatchEnabled = false
+local showCaseSuppressConn = nil
+local lightingBlurConn = nil
+local eggTypeDropdown = nil 
+
+-- Pet Deletion Variables
+getgenv().autoDeleteCommon = false
+getgenv().autoDeleteUncommon = false
+getgenv().autoDeleteRare = false
+getgenv().autoDeleteEpic = false
+getgenv().autoDeleteLoopActive = false
+
+
+local function handleAutoDelete()
+    -- Prevent multiple loops from running at once
+    if getgenv().autoDeleteLoopActive then return end
+
+    -- If all toggles are off, don't start the loop
+    if not (getgenv().autoDeleteCommon or getgenv().autoDeleteUncommon or getgenv().autoDeleteRare or getgenv().autoDeleteEpic) then return end
+
+    getgenv().autoDeleteLoopActive = true
+    task.spawn(function()
+        while (getgenv().autoDeleteCommon or getgenv().autoDeleteUncommon or getgenv().autoDeleteRare or getgenv().autoDeleteEpic) do
+            if GetPetsRemote and ChangePetRemote then
+                -- Safely get pets (pcall prevents the script from breaking if the server errors)
+                local success, myPets = pcall(function() return GetPetsRemote:InvokeServer() end)
+
+                if success and type(myPets) == "table" then
+                    local petsToDelete = {}
+
+                    for _, petData in pairs(myPets) do
+                        if petData.Equipped == false then
+                            local rarity = petData.Rarity
+
+                            if (rarity == "Common" and getgenv().autoDeleteCommon) or
+                               (rarity == "Uncommon" and getgenv().autoDeleteUncommon) or
+                               (rarity == "Rare" and getgenv().autoDeleteRare) or
+                               (rarity == "Epic" and getgenv().autoDeleteEpic) then
+
+                                table.insert(petsToDelete, petData.ID)
+                            end
+                        end
+                    end
+
+                    if #petsToDelete > 0 then
+                        pcall(function() ChangePetRemote:InvokeServer(petsToDelete, "MultiDelete") end)
+                    end
+                end
+            end
+            task.wait(2) 
+        end
+        getgenv().autoDeleteLoopActive = false
+    end)
+end
+
+
+FarmTab:CreateSection("World Selection")
+
+FarmTab:CreateDropdown({
+   Name = "Select World",
+   Options = {"World 1", "World 2", "World 3"},
+   CurrentOption = {"World 1"},
+   MultipleOptions = false,
+   Flag = "WorldSelectDropdown",
+   Callback = function(Option)
+       local worldName = Option[1] or Option
+       local worldNum = tonumber(worldName:match("%d+")) or 1
+       getgenv().currentWorld = worldNum
+
+       local newEggOptions = worldEggOptions[worldNum]
+       getgenv().selectedEggType = newEggOptions[1]
+
+       
+       if eggTypeDropdown and eggTypeDropdown.Refresh then
+           pcall(function()
+               eggTypeDropdown:Refresh(newEggOptions, true)
+           end)
+       end
+
+       Rayfield:Notify({
+           Title = "World Changed",
+           Content = "Switched to " .. worldName .. ". Teleport spot and egg list updated.",
+           Duration = 3,
+       })
+   end,
+})
+
+FarmTab:CreateSection("Auto Farming")
+
+FarmTab:CreateToggle({
+   Name = "Auto Wall Break & Teleport",
+   CurrentValue = false,
+   Flag = "AutoBreakTP",
+   Callback = function(Value)
+       getgenv().autoBreakAndTeleport = Value
+       if Value then
+           task.spawn(function()
+               local remote = game:GetService("ReplicatedStorage").Remotes.Events:FindFirstChild("WallBreakFinished")
+
+               while getgenv().autoBreakAndTeleport do
+                   local character = player.Character or player.CharacterAdded:Wait()
+                   local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+                   if rootPart and remote then
+                       -- 1. The Loop
+                       for i = 1, 25 do
+                           if not getgenv().autoBreakAndTeleport then break end
+                           remote:FireServer()
+                           task.wait(0.01)
+                       end
+
+                       -- 2. The Teleport
+                       if getgenv().autoBreakAndTeleport then
+                           local targetCFrame = worldCoordinates[getgenv().currentWorld] or worldCoordinates[1]
+                           rootPart.CFrame = targetCFrame
+                       end
+                   end
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+FarmTab:CreateSection("Auto Rebirth")
+
+FarmTab:CreateToggle({
+   Name = "Auto Rebirth",
+   CurrentValue = false,
+   Flag = "AutoRebirth",
+   Callback = function(Value)
+       getgenv().autoRebirth = Value
+       if Value then
+           task.spawn(function()
+               warn("[AutoRebirth] Loop started")
+               while getgenv().autoRebirth do
+                   local ok, wins = pcall(getCurrentWins)
+                   if not ok then
+                       warn("[AutoRebirth] Failed to read Wins stat:", wins)
+                       task.wait(1)
+                   elseif wins >= getgenv().requiredWinsForRebirth then
+                       warn("[AutoRebirth] Wins =", wins, "-> firing RebirthRemote")
+                       local fireOk, fireErr = pcall(function()
+                           game:GetService("ReplicatedStorage").Remotes.Events.RebirthRemote:FireServer()
+                       end)
+                       if not fireOk then
+                           warn("[AutoRebirth] FireServer failed:", fireErr)
+                       end
+                       task.wait(1)
+                   else
+                       warn("[AutoRebirth] Wins =", wins, "below threshold, waiting")
+                       task.wait(0.5)
+                   end
+               end
+               warn("[AutoRebirth] Loop stopped")
+           end)
+       end
+   end,
+})
+
+-- ==========================================
+-- UPGRADES TAB
+-- ==========================================
+UpgradesTab:CreateSection("Auto Buy Upgrades")
+
+UpgradesTab:CreateToggle({
+   Name = "Auto Buy Punch Speed",
+   CurrentValue = false,
+   Flag = "AutoUpgradePunch",
+   Callback = function(Value)
+       getgenv().autoUpgradePunch = Value
+       if Value then
+           task.spawn(function()
+               while getgenv().autoUpgradePunch do
+                   local args = { [1] = "Punch Speed", [2] = "Win" }
+                   game:GetService("ReplicatedStorage").Remotes.Events.BuyUpgrade:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+UpgradesTab:CreateToggle({
+   Name = "Auto Buy Aura Luck",
+   CurrentValue = false,
+   Flag = "AutoUpgradeAura",
+   Callback = function(Value)
+       getgenv().autoUpgradeAura = Value
+       if Value then
+           task.spawn(function()
+               while getgenv().autoUpgradeAura do
+                   local args = { [1] = "Aura Luck", [2] = "Win" }
+                   game:GetService("ReplicatedStorage").Remotes.Events.BuyUpgrade:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+UpgradesTab:CreateToggle({
+   Name = "Auto Buy Title Luck",
+   CurrentValue = false,
+   Flag = "AutoUpgradeTitle",
+   Callback = function(Value)
+       getgenv().autoUpgradeTitle = Value
+       if Value then
+           task.spawn(function()
+               while getgenv().autoUpgradeTitle do
+                   local args = { [1] = "Title Luck", [2] = "Win" }
+                   game:GetService("ReplicatedStorage").Remotes.Events.BuyUpgrade:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+UpgradesTab:CreateToggle({
+   Name = "Auto Buy Pet Luck",
+   CurrentValue = false,
+   Flag = "AutoUpgradePetLuck",
+   Callback = function(Value)
+       getgenv().autoUpgradePetLuck = Value
+       if Value then
+           task.spawn(function()
+               while getgenv().autoUpgradePetLuck do
+                   local args = { [1] = "Pet Luck", [2] = "Win" }
+                   game:GetService("ReplicatedStorage").Remotes.Events.BuyUpgrade:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+UpgradesTab:CreateToggle({
+   Name = "Auto Buy Pet Equip",
+   CurrentValue = false,
+   Flag = "AutoUpgradePetEquip",
+   Callback = function(Value)
+       getgenv().autoUpgradePetEquip = Value
+       if Value then
+           task.spawn(function()
+               while getgenv().autoUpgradePetEquip do
+                   local args = { [1] = "Pet Equip", [2] = "Win" }
+                   game:GetService("ReplicatedStorage").Remotes.Events.BuyUpgrade:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+-- ==========================================
+-- PETS TAB
+-- ==========================================
+PetsTab:CreateSection("Auto Hatch Eggs")
+
+eggTypeDropdown = PetsTab:CreateDropdown({
+   Name = "Egg Type",
+   Options = worldEggOptions[getgenv().currentWorld],
+   CurrentOption = {worldEggOptions[getgenv().currentWorld][1]},
+   MultipleOptions = false,
+   Flag = "EggTypeDropdown",
+   Callback = function(Option)
+       -- Option is a table even in single-select mode
+       getgenv().selectedEggType = Option[1] or Option
+   end,
+})
+
+PetsTab:CreateToggle({
+   Name = "Auto Hatch (On/Off)",
+   CurrentValue = false,
+   Flag = "AutoHatchToggle",
+   Callback = function(Value)
+       getgenv().autoHatchEnabled = Value
+
+       -- Suppress the pet reveal popup while auto hatching, restore it after.
+       -- The game re-enables ShowCaseUI on its own each hatch, so we keep forcing it back off.
+       local showCaseUI = player:WaitForChild("PlayerGui"):FindFirstChild("ShowCaseUI")
+       if showCaseUI then
+           if showCaseSuppressConn then
+               showCaseSuppressConn:Disconnect()
+               showCaseSuppressConn = nil
+           end
+
+           if Value then
+               showCaseUI.Enabled = false
+               showCaseSuppressConn = showCaseUI:GetPropertyChangedSignal("Enabled"):Connect(function()
+                   if getgenv().autoHatchEnabled and showCaseUI.Enabled then
+                       showCaseUI.Enabled = false
+                   end
+               end)
+           else
+               showCaseUI.Enabled = true
+           end
+       end
+
+       -- The reveal animation also turns on a Lighting blur; keep it suppressed too
+       local lighting = game:GetService("Lighting")
+       if lightingBlurConn then
+           lightingBlurConn:Disconnect()
+           lightingBlurConn = nil
+       end
+
+       if Value then
+           for _, effect in ipairs(lighting:GetChildren()) do
+               if effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") then
+                   effect.Enabled = false
+               end
+           end
+           lightingBlurConn = lighting.ChildAdded:Connect(function(child)
+               if getgenv().autoHatchEnabled and (child:IsA("BlurEffect") or child:IsA("DepthOfFieldEffect")) then
+                   child.Enabled = false
+               end
+           end)
+       else
+           for _, effect in ipairs(lighting:GetChildren()) do
+               if effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") then
+                   effect.Enabled = true
+               end
+           end
+       end
+
+       if Value then
+           task.spawn(function()
+               while getgenv().autoHatchEnabled do
+                   local args = { [1] = getgenv().selectedEggType, [2] = 1 }
+                   game:GetService("ReplicatedStorage").Remotes.HatchPet:FireServer(unpack(args))
+                   task.wait(0.1)
+               end
+           end)
+       end
+   end,
+})
+
+PetsTab:CreateParagraph({
+   Title = "Note",
+   Content = "If egg gets stuck, delete a pet, re-hatch, and equip best.",
+})
+
+PetsTab:CreateSection("Auto Delete Pets")
+
+PetsTab:CreateToggle({
+   Name = "Auto Delete Common",
+   CurrentValue = false,
+   Flag = "AutoDelCommon",
+   Callback = function(Value)
+       getgenv().autoDeleteCommon = Value
+       if Value then handleAutoDelete() end
+   end,
+})
+
+PetsTab:CreateToggle({
+   Name = "Auto Delete Uncommon",
+   CurrentValue = false,
+   Flag = "AutoDelUncommon",
+   Callback = function(Value)
+       getgenv().autoDeleteUncommon = Value
+       if Value then handleAutoDelete() end
+   end,
+})
+
+PetsTab:CreateToggle({
+   Name = "Auto Delete Rare",
+   CurrentValue = false,
+   Flag = "AutoDelRare",
+   Callback = function(Value)
+       getgenv().autoDeleteRare = Value
+       if Value then handleAutoDelete() end
+   end,
+})
+
+PetsTab:CreateToggle({
+   Name = "Auto Delete Epic",
+   CurrentValue = false,
+   Flag = "AutoDelEpic",
+   Callback = function(Value)
+       getgenv().autoDeleteEpic = Value
+       if Value then handleAutoDelete() end
+   end,
+})
+
+-- ==========================================
+-- SETTINGS TAB
+-- ==========================================
+SettingsTab:CreateSection("Client Settings")
+
+SettingsTab:CreateButton({
+   Name = "Disable Gameplay Paused Notification",
+   Callback = function()
+       game:GetService("GuiService"):SetGameplayPausedNotificationEnabled(false)
+       Rayfield:Notify({
+           Title = "Success",
+           Content = "Gameplay paused notification has been disabled.",
+           Duration = 3,
+           Image = 4483362458,
+       })
+   end,
+})
